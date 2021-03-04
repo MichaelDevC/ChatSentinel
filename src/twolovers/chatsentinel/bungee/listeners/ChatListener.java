@@ -1,5 +1,6 @@
 package twolovers.chatsentinel.bungee.listeners;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -15,6 +16,7 @@ import net.md_5.bungee.api.plugin.PluginManager;
 import net.md_5.bungee.event.EventHandler;
 import net.md_5.bungee.event.EventPriority;
 import twolovers.chatsentinel.bungee.modules.ModuleManager;
+import twolovers.chatsentinel.bungee.utils.ConfigUtil;
 import twolovers.chatsentinel.shared.chat.ChatPlayer;
 import twolovers.chatsentinel.shared.chat.ChatPlayerManager;
 import twolovers.chatsentinel.shared.interfaces.Module;
@@ -31,12 +33,14 @@ public class ChatListener implements Listener {
 	final private Plugin plugin;
 	final private ModuleManager moduleManager;
 	final private ChatPlayerManager chatPlayerManager;
+	private final ConfigUtil configUtil;
 
 	public ChatListener(final Plugin plugin, final ModuleManager moduleManager,
-			final ChatPlayerManager chatPlayerManager) {
+						final ChatPlayerManager chatPlayerManager, ConfigUtil configUtil) {
 		this.plugin = plugin;
 		this.moduleManager = moduleManager;
 		this.chatPlayerManager = chatPlayerManager;
+		this.configUtil = configUtil;
 	}
 
 	@EventHandler(priority = EventPriority.LOWEST)
@@ -47,115 +51,120 @@ public class ChatListener implements Listener {
 			if (sender instanceof ProxiedPlayer) {
 				final ProxiedPlayer player = (ProxiedPlayer) sender;
 
-				if (!player.hasPermission("chatsentinel.bypass")) {
-					final UUID uuid = player.getUniqueId();
-					final WhitelistModule whitelistModule = moduleManager.getWhitelistModule();
-					final ChatPlayer chatPlayer = chatPlayerManager.getPlayer(uuid);
-					final String originalMessage = event.getMessage().trim();
-					final String modifiedMessage;
-					final boolean isCommand = event.isCommand();
+				String serverPlayer = player.getServer().getInfo().getName();
+				List<String> serverWhitelist = configUtil.get("%datafolder%/config.yml").getStringList("server-whitelist");
 
-					if (whitelistModule.isEnabled()) {
-						final Pattern whitelistPattern = whitelistModule.getPattern(),
-								namesPattern = whitelistModule.getNamesPattern();
+				if(!serverWhitelist.contains(serverPlayer)){ //Whitelist server filter
+					if (!player.hasPermission("chatsentinel.bypass")) {
+						final UUID uuid = player.getUniqueId();
+						final WhitelistModule whitelistModule = moduleManager.getWhitelistModule();
+						final ChatPlayer chatPlayer = chatPlayerManager.getPlayer(uuid);
+						final String originalMessage = event.getMessage().trim();
+						final String modifiedMessage;
+						final boolean isCommand = event.isCommand();
 
-						modifiedMessage = whitelistPattern.matcher(
-								namesPattern.matcher(whitelistModule.formatMessage(originalMessage)).replaceAll(""))
-								.replaceAll("").trim();
-					} else {
-						modifiedMessage = whitelistModule.formatMessage(originalMessage);
-					}
+						if (whitelistModule.isEnabled()) {
+							final Pattern whitelistPattern = whitelistModule.getPattern(),
+									namesPattern = whitelistModule.getNamesPattern();
 
-					final MessagesModule messagesModule = moduleManager.getMessagesModule();
-					final ProxyServer server = plugin.getProxy();
-					final String playerName = player.getName(), lang = VersionUtil.getLocale(player);
+							modifiedMessage = whitelistPattern.matcher(
+									namesPattern.matcher(whitelistModule.formatMessage(originalMessage)).replaceAll(""))
+									.replaceAll("").trim();
+						} else {
+							modifiedMessage = whitelistModule.formatMessage(originalMessage);
+						}
 
-					for (final Module module : moduleManager.getModules()) {
-						if (!player.hasPermission("chatsentinel.bypass." + module.getName())
-								&& (!isCommand || module instanceof CooldownModule || module instanceof SyntaxModule
-										|| whitelistModule.startsWithCommand(originalMessage))
-								&& module.meetsCondition(chatPlayer, modifiedMessage)) {
-							final int warns = chatPlayer.addWarn(module), maxWarns = module.getMaxWarns();
-							final String[][] placeholders = {
-									{ "%player%", "%message%", "%warns%", "%maxwarns%", "%cooldown%" },
-									{ playerName, originalMessage, String.valueOf(warns),
-											String.valueOf(module.getMaxWarns()), String.valueOf(0) } };
+						final MessagesModule messagesModule = moduleManager.getMessagesModule();
+						final ProxyServer server = plugin.getProxy();
+						final String playerName = player.getName(), lang = VersionUtil.getLocale(player);
 
-							if (module instanceof BlacklistModule) {
-								final BlacklistModule blacklistModule = (BlacklistModule) module;
+						for (final Module module : moduleManager.getModules()) {
+							if (!player.hasPermission("chatsentinel.bypass." + module.getName())
+									&& (!isCommand || module instanceof CooldownModule || module instanceof SyntaxModule
+									|| whitelistModule.startsWithCommand(originalMessage))
+									&& module.meetsCondition(chatPlayer, modifiedMessage)) {
+								final int warns = chatPlayer.addWarn(module), maxWarns = module.getMaxWarns();
+								final String[][] placeholders = {
+										{ "%player%", "%message%", "%warns%", "%maxwarns%", "%cooldown%" },
+										{ playerName, originalMessage, String.valueOf(warns),
+												String.valueOf(module.getMaxWarns()), String.valueOf(0) } };
 
-								if (blacklistModule.isHideWords()) {
-									event.setMessage(
-											blacklistModule.getPattern().matcher(modifiedMessage).replaceAll("***"));
-								} else
+								if (module instanceof BlacklistModule) {
+									final BlacklistModule blacklistModule = (BlacklistModule) module;
+
+									if (blacklistModule.isHideWords()) {
+										event.setMessage(
+												blacklistModule.getPattern().matcher(modifiedMessage).replaceAll("***"));
+									} else
+										event.setCancelled(true);
+								} else if (module instanceof CapsModule) {
+									final CapsModule capsModule = (CapsModule) module;
+
+									if (capsModule.isReplace())
+										event.setMessage(originalMessage.toLowerCase());
+									else
+										event.setCancelled(true);
+								} else if (module instanceof CooldownModule) {
+									placeholders[1][4] = String.valueOf(
+											((CooldownModule) module).getRemainingTime(chatPlayer, originalMessage));
+
 									event.setCancelled(true);
-							} else if (module instanceof CapsModule) {
-								final CapsModule capsModule = (CapsModule) module;
+								} else if (module instanceof FloodModule) {
+									final FloodModule floodModule = (FloodModule) module;
 
-								if (capsModule.isReplace())
-									event.setMessage(originalMessage.toLowerCase());
-								else
-									event.setCancelled(true);
-							} else if (module instanceof CooldownModule) {
-								placeholders[1][4] = String.valueOf(
-										((CooldownModule) module).getRemainingTime(chatPlayer, originalMessage));
+									if (floodModule.isReplace()) {
+										final String replacedString = floodModule.replace(originalMessage);
 
-								event.setCancelled(true);
-							} else if (module instanceof FloodModule) {
-								final FloodModule floodModule = (FloodModule) module;
-
-								if (floodModule.isReplace()) {
-									final String replacedString = floodModule.replace(originalMessage);
-
-									if (!replacedString.isEmpty()) {
-										event.setMessage(replacedString);
+										if (!replacedString.isEmpty()) {
+											event.setMessage(replacedString);
+										} else {
+											event.setCancelled(true);
+										}
 									} else {
 										event.setCancelled(true);
 									}
 								} else {
 									event.setCancelled(true);
 								}
-							} else {
-								event.setCancelled(true);
-							}
 
-							final CommandSender console = server.getConsole();
-							final String notificationMessage = module.getWarnNotification(placeholders);
-							final String warnMessage = messagesModule.getWarnMessage(placeholders, lang,
-									module.getName());
+								final CommandSender console = server.getConsole();
+								final String notificationMessage = module.getWarnNotification(placeholders);
+								final String warnMessage = messagesModule.getWarnMessage(placeholders, lang,
+										module.getName());
 
-							if (warnMessage != null && !warnMessage.isEmpty()) {
-								player.sendMessage(TextComponent.fromLegacyText(warnMessage));
-							}
+								if (warnMessage != null && !warnMessage.isEmpty()) {
+									player.sendMessage(TextComponent.fromLegacyText(warnMessage));
+								}
 
-							if (notificationMessage != null && !notificationMessage.isEmpty()) {
-								for (final ProxiedPlayer player1 : server.getPlayers()) {
-									if (player1.hasPermission("chatsentinel.notify")) {
-										player1.sendMessage(TextComponent.fromLegacyText(notificationMessage));
+								if (notificationMessage != null && !notificationMessage.isEmpty()) {
+									for (final ProxiedPlayer player1 : server.getPlayers()) {
+										if (player1.hasPermission("chatsentinel.notify")) {
+											player1.sendMessage(TextComponent.fromLegacyText(notificationMessage));
+										}
 									}
+
+									console.sendMessage(TextComponent.fromLegacyText(notificationMessage));
 								}
 
-								console.sendMessage(TextComponent.fromLegacyText(notificationMessage));
-							}
+								if (warns >= maxWarns && maxWarns > 0) {
+									final PluginManager pluginManager = server.getPluginManager();
 
-							if (warns >= maxWarns && maxWarns > 0) {
-								final PluginManager pluginManager = server.getPluginManager();
+									for (final String command : module.getCommands(placeholders)) {
+										pluginManager.dispatchCommand(console, command);
+									}
 
-								for (final String command : module.getCommands(placeholders)) {
-									pluginManager.dispatchCommand(console, command);
+									chatPlayer.clearWarns();
 								}
 
-								chatPlayer.clearWarns();
-							}
-
-							if (event.isCancelled()) {
-								break;
+								if (event.isCancelled()) {
+									break;
+								}
 							}
 						}
-					}
 
-					if (!event.isCancelled())
-						chatPlayer.addLastMessage(modifiedMessage, System.currentTimeMillis());
+						if (!event.isCancelled())
+							chatPlayer.addLastMessage(modifiedMessage, System.currentTimeMillis());
+					}
 				}
 			}
 		}
