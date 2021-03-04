@@ -1,3 +1,8 @@
+# Servers where the plugin don't check anything!
+server-whitelist:
+  - "test1"
+
+
 # Replaces words of messages by the ones on whitelist.yml before doing checks.
 # This prevents false positives.
 whitelist:
